@@ -33,6 +33,7 @@ extern "C" {
 #include "Arduino.h"
 #include "Wire.h"
 
+#define DEBUG_PRINT false
 TwoWire *TwoWire::g_SCIWires[TWOWIRE_MAX_SCI_CHANNELS] = {nullptr};
 TwoWire *TwoWire::g_I2CWires[TWOWIRE_MAX_I2C_CHANNELS] = {nullptr};
 
@@ -336,7 +337,6 @@ void TwoWire::_begin(void) {
         m_i2c_extend.timeout_mode             = IIC_MASTER_TIMEOUT_MODE_SHORT;
         m_i2c_extend.timeout_scl_low          = IIC_MASTER_TIMEOUT_SCL_LOW_ENABLED;
       }
-
       m_i2c_cfg.channel                     = channel;
       m_i2c_cfg.rate                        = I2C_MASTER_RATE_STANDARD;
       m_i2c_cfg.slave                       = 0x00;
@@ -521,16 +521,16 @@ uint8_t TwoWire::write_to(uint8_t address, uint8_t* data, uint8_t length, uint32
       }
       if (err==FSP_ERR_INVALID_SIZE) {
         rv = END_TX_DATA_TOO_LONG;
-        Serial.println(F("Invalid size when trying to write"));
+        if (DEBUG_PRINT) Serial.println(F("Invalid size when trying to write"));
       } 
 
     } else  // No FSP_SUCCESS in m_setSlaveAdd or WIRE_STATUS_TRANSACTION_ABORTED 
       if (err == FSP_ERR_IN_USE) {
-        Serial.println(F("An I2C Transaction is in progress. when setting slave address"));
+        if (DEBUG_PRINT) Serial.println(F("An I2C Transaction is in progress. when setting slave address"));
       } else
         if (bus_status == WIRE_STATUS_TRANSACTION_ABORTED){
           rv = END_TX_NACK_ON_ADD;
-          Serial.println(F("Transaction aborted -> NACK on ADDR"));
+          if (DEBUG_PRINT) Serial.println(F("Transaction aborted -> NACK on ADDR"));
       }
 
     // If FSP_SUCCESS, wait for change in bus_status or timeout
@@ -544,7 +544,7 @@ uint8_t TwoWire::write_to(uint8_t address, uint8_t* data, uint8_t length, uint32
     }
     else if(data_too_long) {
       rv = END_TX_DATA_TOO_LONG;
-      Serial.println(F("Trying to write more than II2C_BUFFER_LENGTH, buffer truncated before written"));
+      if (DEBUG_PRINT) Serial.println(F("Trying to write more than II2C_BUFFER_LENGTH, buffer truncated before written"));
     }
     else if(bus_status == WIRE_STATUS_UNSET) {
       rv = END_TX_TIMEOUT;
@@ -693,30 +693,80 @@ void TwoWire::clearWireTimeoutFlag(void){
 void TwoWire::handleTimeout(bool reset){
 /* -------------------------------------------------------------------------- */
   timed_out_flag = true;
-  Serial.println(F("Handling TwoWire::handleTimeout()"));
 
-  if (reset) { //TBD; What do we do here? like fixHungWire()?
+  if(m_abort != nullptr) {
+  if (DEBUG_PRINT) Serial.print(F("handleTimeout abort result: "));
+    fsp_err_t err = m_abort(&m_i2c_ctrl);
+    (void)err;
+    if (DEBUG_PRINT) Serial.println(err);
+  }
+
+  if (reset) { 
+    
+    end();
+
+    // Make sure that other devices are not holding the bus
+    // by pulsing he clock 9 times
+    pinMode(sda_pin,OUTPUT); // setup A4 and A5 as outputs
+    pinMode(scl_pin,OUTPUT);
+    //Pulse the clock 9 times
+    for (int i=0;i<9;i++) {
+      digitalWrite(scl_pin,LOW);
+      digitalWrite(scl_pin,HIGH); // then flash some LEDS on A4 and A5
+    }
+    // Stop
+    digitalWrite(scl_pin,LOW); //
+    digitalWrite(sda_pin,LOW);
+    digitalWrite(scl_pin,HIGH); //
+    pinMode(sda_pin,INPUT);
+
+    begin();
+  }
+}
+
+
+
+//TBD; What do we do here? like fixHungWire()?
     // TBD, Is this the way to go to reset the bus? 
     // Do we need more to handle devices that hangs the bus?
-    Serial.print(F("with reset Abort result: "));
-    if(m_abort != nullptr) {
-      //setBusStatus(WIRE_STATUS_TRANSACTION_ABORTED);
-      fsp_err_t err = m_abort(&m_i2c_ctrl);
-      Serial.println(err);
-    }
+
+    // Close the peripheral so that we can control the pins 
+    //if(m_close != nullptr) {
+      //if (DEBUG_PRINT) Serial.print(F("with reset close result: "));
+      //fsp_err_t err = m_close(&m_i2c_ctrl);
+      //(void)err; // To avoid compiler warning for not used variable
+      //if (DEBUG_PRINT) Serial.println(err);
+    //}
+
     // TDB, Is this the right way to get back after reset?
-    if(m_open != nullptr) {
-      fsp_err_t err = m_open(&m_i2c_ctrl,&m_i2c_cfg);
-      if(FSP_SUCCESS == err) {
-         init_ok &= true;
-      }
-      Serial.print(F(" Open result: "));
-      Serial.println(err);
-    }
+
+    // Make sure that other devices are not holding the bus
+    // by pulsing he clock 9 times
+    //pinMode(sda_pin,OUTPUT); // setup A4 and A5 as outputs
+    //pinMode(scl_pin,OUTPUT);
+    //Pulse the clock 9 times 
+    //for (int i=0;i<9;i++) {
+    //  digitalWrite(scl_pin,LOW);
+    //  digitalWrite(scl_pin,HIGH); // then flash some LEDS on A4 and A5
+    //}
+    // Stop
+    //digitalWrite(scl_pin,LOW); //
+    //digitalWrite(sda_pin,LOW);
+    //digitalWrite(scl_pin,HIGH); //
+    //pinMode(sda_pin,INPUT);
+
+    //if(m_open != nullptr) {
+    //  if (DEBUG_PRINT) Serial.print(F("with reset open result: "));
+    //  fsp_err_t err = m_open(&m_i2c_ctrl,&m_i2c_cfg);
+    //  if(FSP_SUCCESS == err) {
+    //     init_ok &= true;
+    //  }
+    //  if (DEBUG_PRINT) Serial.println(err);
+    //}
     // Is it neccesarry to do the open after the abort?
     // Is that more to be done after the abort to get back to same settings
-  } 
-}
+  //} 
+//}
 
 /*  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  *                           TRANSMISSION BEGIN
